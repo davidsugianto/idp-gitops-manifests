@@ -1,0 +1,44 @@
+name: Validate K8s Manifests
+
+on:
+  pull_request:
+    branches: ["master", "main"]
+  push:
+    branches: ["master", "main"]  
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Setup kubeconform
+        run: |
+          wget -q https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Kustomize Build Validation
+        run: |
+          find environments/ -name "kustomization.yaml" -exec dirname {} \; | while read dir; do
+            echo "Building $dir..."
+            kustomize build "$dir" > /dev/null
+          done
+
+      - name: Schema Validation
+        run: |
+          find environments/ -name "kustomization.yaml" -exec dirname {} \; | while read dir; do
+            echo "Validating $dir..."
+            kustomize build "$dir" | kubeconform -strict -kubernetes-version 1.28.0
+          done
+
+      - name: Security Scan with Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: environments/
+          framework: kubernetes
+          soft_fail: false

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: dev
+
+resources:
+  # Environment-level resources (shared)
+  - namespace.yaml
+  - resource-quota.yaml
+  - limit-range.yaml
+  - network-policy.yaml
+  
+  # Per-service overlays (will be updated by scaffold script)
+  - go-http-server
+  # Add new service here

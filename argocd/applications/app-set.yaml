@@ -1,0 +1,65 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: microservices-matrix
+  namespace: argocd
+spec:
+  generators:
+  - matrix:
+      generators:
+      # Generator 1: Environment configuration
+      - list:
+          elements:
+          - env: dev
+            cluster: https://kubernetes.default.svc
+            namespace: dev  # Shared namespace
+            syncPolicy: |
+              automated:
+                prune: true
+                selfHeal: true
+          - env: staging
+            cluster: https://kubernetes.default.svc
+            namespace: staging  # Shared namespace
+            syncPolicy: |
+              automated:
+                prune: true
+                selfHeal: true
+          - env: prod
+            cluster: https://prod-cluster.internal
+            namespace: "prod-{{path.basename}}"  # Dedicated namespace per service
+            syncPolicy: ""  # Manual sync
+      # Generator 2: Service discovery from bases/
+      - git:
+          repoURL: https://github.com/davidsugianto/idp-gitops-manifests.git
+          revision: master
+          directories:
+          - path: bases/*
+  template:
+    metadata:
+      name: '{{path.basename}}-{{env}}'
+      labels:
+        app.kubernetes.io/part-of: '{{path.basename}}'
+        environment: '{{env}}'
+      annotations:
+        notifications.argoproj.io/subscribe.on-sync-succeeded.slack: deployments
+    spec:
+      project: apps-project
+      source:
+        repoURL: https://github.com/davidsugianto/idp-gitops-manifests.git
+        targetRevision: master
+        path: 'environments/{{env}}/{{path.basename}}'
+      destination:
+        server: '{{cluster}}'
+        namespace: '{{namespace}}'
+      syncPolicy:
+        {{- if .syncPolicy }}
+        {{- .syncPolicy | nindent 8 }}
+        {{- end }}
+        syncOptions:
+        - CreateNamespace=true
+        - PrunePropagationPolicy=foreground
+      ignoreDifferences:
+      - group: apps
+        kind: Deployment
+        jsonPointers:
+        - /spec/replicas

@@ -1,0 +1,6 @@
+framework: kubernetes
+compact: true
+quiet: true
+skip-check:
+  - CKV_K8S_15 # Image pull policy (we use Always in production)
+  - CKV_K8S_20 # Privileged containers (allowed for platform components)
