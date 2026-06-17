@@ -32,7 +32,7 @@ mkdir -p "${BASE_DIR}"
 
 echo -e "${YELLOW}📦 Creating base manifests...${NC}"
 
-# Create deployment.yaml
+# Create deployment.yaml (without hardcoded image tag)
 cat > "${BASE_DIR}/deployment.yaml" <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -52,7 +52,7 @@ spec:
     spec:
       containers:
       - name: ${SERVICE_NAME}
-        image: ${IMAGE_NAME}:latest
+        image: ${IMAGE_NAME}:latest  # Placeholder, will be overridden by kustomize images field
         ports:
         - containerPort: 8080
           name: http
@@ -172,7 +172,7 @@ spec:
       property: url
 EOF
 
-# Create kustomization.yaml
+# Create kustomization.yaml (without field images:)
 cat > "${BASE_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -188,10 +188,6 @@ components:
   - ../../components/security-hardening
   - ../../components/observability
   - ../../components/common-labels
-
-images:
-  - name: ${IMAGE_NAME}
-    newTag: latest
 EOF
 
 echo -e "${GREEN}✅ Base manifests created in ${BASE_DIR}${NC}"
@@ -205,9 +201,18 @@ for ENV in dev staging prod; do
     
     echo -e "${YELLOW}🎨 Creating ${ENV} environment overlay...${NC}"
     
+    # Determine image tag per environment
+    if [ "$ENV" == "dev" ]; then
+        IMAGE_TAG="dev-latest"
+    elif [ "$ENV" == "staging" ]; then
+        IMAGE_TAG="staging-latest"
+    else
+        IMAGE_TAG="latest"  # Prod will be updated by manual or via release workflow
+    fi
+    
     if [ "$ENV" == "prod" ]; then
         # ═══════════════════════════════════════════════════════════════
-        # PRODUCTION: Dedicated namespace dengan isolation resources
+        # PRODUCTION: Dedicated namespace with isolation resources
         # ═══════════════════════════════════════════════════════════════
         
         # Create namespace.yaml
@@ -281,19 +286,16 @@ spec:
   - Egress
   
   ingress:
-  # Allow dari ingress controller
   - from:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: ingress-nginx
-  # Allow dari service lain di prod
   - from:
     - namespaceSelector:
         matchLabels:
           environment: prod
   
   egress:
-  # Allow DNS
   - to:
     - namespaceSelector:
         matchLabels:
@@ -303,7 +305,6 @@ spec:
       port: 53
     - protocol: TCP
       port: 53
-  # Allow ke service lain di prod
   - to:
     - namespaceSelector:
         matchLabels:
@@ -324,7 +325,7 @@ spec:
       app: ${SERVICE_NAME}
 EOF
 
-        # Create kustomization.yaml for prod
+        # Create kustomization.yaml for prod (DENGAN field images:)
         cat > "${ENV_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -337,6 +338,11 @@ resources:
   - pod-disruption-budget.yaml
   - ../../../bases/${SERVICE_NAME}
 
+# Image tag for production (manual update or via release workflow)
+images:
+  - name: ${IMAGE_NAME}
+    newTag: ${IMAGE_TAG}
+
 patches:
   - path: patches/deployment-patch.yaml
   - path: patches/ingress-patch.yaml
@@ -345,13 +351,14 @@ patches:
 EOF
 
         echo -e "${GREEN}  ✅ Production: Dedicated namespace (prod-${SERVICE_NAME})${NC}"
+        echo -e "${GREEN}  ✅ Image tag: ${IMAGE_TAG}${NC}"
         
     else
         # ═══════════════════════════════════════════════════════════════
         # DEV/STAGING: Shared namespace (simpler)
         # ═══════════════════════════════════════════════════════════════
         
-        # Create kustomization.yaml for dev/staging
+        # Create kustomization.yaml for dev/staging (DENGAN field images:)
         cat > "${ENV_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -361,6 +368,11 @@ namespace: ${ENV}
 resources:
   - ../../../bases/${SERVICE_NAME}
 
+# Image tag untuk ${ENV} (akan di-update otomatis oleh CI workflow)
+images:
+  - name: ${IMAGE_NAME}
+    newTag: ${IMAGE_TAG}
+
 patches:
   - path: patches/deployment-patch.yaml
   - path: patches/ingress-patch.yaml
@@ -369,13 +381,14 @@ patches:
 EOF
 
         echo -e "${GREEN}  ✅ ${ENV}: Shared namespace (${ENV})${NC}"
+        echo -e "${GREEN}  ✅ Image tag: ${IMAGE_TAG}${NC}"
     fi
     
     # ═══════════════════════════════════════════════════════════════
-    # COMMON: Patches for all environment
+    # COMMON: Patches for all environment (without image override)
     # ═══════════════════════════════════════════════════════════════
     
-    # Create deployment-patch.yaml
+    # Create deployment-patch.yaml (without image override)
     if [ "$ENV" == "dev" ]; then
         LOG_LEVEL="debug"
     elif [ "$ENV" == "staging" ]; then
@@ -395,7 +408,6 @@ spec:
     spec:
       containers:
       - name: ${SERVICE_NAME}
-        image: ${IMAGE_NAME}:${ENV}-latest
         env:
         - name: LOG_LEVEL
           value: "${LOG_LEVEL}"
@@ -497,7 +509,6 @@ for ENV in dev staging; do
     KUSTOMIZATION_FILE="environments/${ENV}/kustomization.yaml"
     
     if [ -f "$KUSTOMIZATION_FILE" ]; then
-        # Check if service already listed
         if ! grep -q "- ${SERVICE_NAME}" "$KUSTOMIZATION_FILE"; then
             echo "  - ${SERVICE_NAME}" >> "$KUSTOMIZATION_FILE"
             echo -e "${GREEN}  ✅ Added ${SERVICE_NAME} to environments/${ENV}/kustomization.yaml${NC}"
@@ -527,6 +538,11 @@ echo -e "${YELLOW}📋 Summary:${NC}"
 echo "  Service: ${SERVICE_NAME}"
 echo "  Image: ${IMAGE_NAME}"
 echo ""
+echo -e "${YELLOW}🏷️  Image Tags per Environment:${NC}"
+echo "  Dev:     ${IMAGE_NAME}:dev-latest (auto-update via CI)"
+echo "  Staging: ${IMAGE_NAME}:staging-latest (auto-update via CI)"
+echo "  Prod:    ${IMAGE_NAME}:latest (manual or release workflow)"
+echo ""
 echo -e "${YELLOW}📁 Files created:${NC}"
 echo "  ✅ bases/${SERVICE_NAME}/"
 echo "  ✅ environments/dev/${SERVICE_NAME}/ (shared namespace: dev)"
@@ -535,16 +551,15 @@ echo "  ✅ environments/prod/${SERVICE_NAME}/ (dedicated namespace: prod-${SERV
 echo ""
 echo -e "${YELLOW}🚀 Next steps:${NC}"
 echo "  1. Review and customize the generated manifests"
-echo "  2. Update image name in bases/${SERVICE_NAME}/kustomization.yaml if needed"
-echo "  3. Add any additional resources (ConfigMaps, additional Services, etc)"
-echo "  4. Commit and create a Pull Request:"
+echo "  2. Setup CI workflow in application repo to call shared workflow"
+echo "  3. Commit and create a Pull Request:"
 echo ""
 echo -e "${BLUE}     git add .${NC}"
 echo -e "${BLUE}     git commit -m \"feat: add ${SERVICE_NAME}\"${NC}"
 echo -e "${BLUE}     git push origin main${NC}"
 echo ""
 echo -e "${YELLOW}⚠️  Important:${NC}"
-echo "  - Dev/Staging will auto-sync to shared namespaces"
+echo "  - Dev/Staging image tags will be auto-updated by CI workflow"
 echo "  - Production requires manual approval in ArgoCD"
 echo "  - Production has dedicated namespace with strict isolation"
 echo ""

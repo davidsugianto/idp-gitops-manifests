@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-go-http-server
+  labels:
+    environment: prod
+    service: go-http-server
+    tier: backend

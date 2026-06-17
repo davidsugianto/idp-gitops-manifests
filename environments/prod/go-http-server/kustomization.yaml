@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - resource-quota.yaml
+  - limit-range.yaml
+  - network-policy.yaml
+  - pod-disruption-budget.yaml
+  - ../../../bases/go-http-server
+
+# Image tag for production (manual update or via release workflow)
+images:
+  - name: docker.io/idiots718/go-http-server
+    newTag: latest
+
+patches:
+  - path: patches/deployment-patch.yaml
+  - path: patches/ingress-patch.yaml
+  - path: patches/hpa-patch.yaml
+  - path: patches/resource-patch.yaml

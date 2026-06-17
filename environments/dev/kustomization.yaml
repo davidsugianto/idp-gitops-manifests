@@ -11,5 +11,5 @@ resources:
   - network-policy.yaml
   
   # Per-service overlays (will be updated by scaffold script)
-  - go-http-server
   # Add new service here
+  - go-http-server
