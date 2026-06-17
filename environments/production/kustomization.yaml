@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The “Production” namespace field is not included here because each service
+# has its own (dedicated) namespace
+
+resources:
+  # Per-service overlays (Each service has its own namespace, quota, and network policy.)
+  - go-http-server
+  # Add new service here
