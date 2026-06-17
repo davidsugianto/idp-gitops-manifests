@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: go-http-server
+spec:
+  rules:
+  - host: go-http-server.davidsugianto.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: go-http-server
+            port:
+              number: 80

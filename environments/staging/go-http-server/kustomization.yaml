@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: staging
+
+resources:
+  - ../../../bases/go-http-server
+
+# Image tag for staging (updated automatically by CI workflow)
+images:
+  - name: docker.io/idiots718/go-http-server
+    newTag: staging-latest
+
+patches:
+  - path: patches/deployment-patch.yaml
+  - path: patches/ingress-patch.yaml
+  - path: patches/hpa-patch.yaml
+  - path: patches/resource-patch.yaml

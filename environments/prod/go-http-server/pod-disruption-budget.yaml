@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-http-server-pdb
+  namespace: prod-go-http-server
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: go-http-server
