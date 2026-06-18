@@ -9,21 +9,50 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# ═══════════════════════════════════════════════════════════════
+# USAGE & ARGUMENTS
+# ═══════════════════════════════════════════════════════════════
+
 # Check if service name is provided
 if [ -z "$1" ] || [ -z "$2" ]; then
     echo -e "${RED}Error: Service name and registry are required${NC}"
-    echo "Usage: $0 <service-name> <registry>"
-    echo "Example: $0 go-payment-service ghcr.io/my-org"
+    echo "Usage: $0 <service-name> <registry> [options]"
+    echo ""
+    echo "Required:"
+    echo "  \$1  Service name (e.g., go-payment-service)"
+    echo "  \$2  Registry URL (e.g., ghcr.io/my-org)"
+    echo ""
+    echo "Optional:"
+    echo "  \$3  Secret store type: aws|vault|gcp (default: aws)"
+    echo "  \$4  Comma-separated secret keys (default: database-url,api-key)"
+    echo "  \$5  Skip external secret: true|false (default: false)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 go-payment-service ghcr.io/my-org"
+    echo "  $0 go-payment-service ghcr.io/my-org vault db-password,redis-url"
+    echo "  $0 go-payment-service ghcr.io/my-org aws database-url true"
     exit 1
 fi
 
 SERVICE_NAME=$1
 REGISTRY=$2
+SECRET_STORE_TYPE=${3:-aws}
+SECRET_KEYS=${4:-"database-url,api-key"}
+SKIP_EXTERNAL_SECRET=${5:-false}
+
 IMAGE_NAME="${REGISTRY}/${SERVICE_NAME}"
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}🚀 Generating scaffold for service: ${SERVICE_NAME}${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${YELLOW}📋 Configuration:${NC}"
+echo "  Service Name: ${SERVICE_NAME}"
+echo "  Registry: ${REGISTRY}"
+echo "  Image: ${IMAGE_NAME}"
+echo "  Secret Store Type: ${SECRET_STORE_TYPE}"
+echo "  Secret Keys: ${SECRET_KEYS}"
+echo "  Skip External Secret: ${SKIP_EXTERNAL_SECRET}"
 echo ""
 
 # Create base directory
@@ -32,7 +61,9 @@ mkdir -p "${BASE_DIR}"
 
 echo -e "${YELLOW}📦 Creating base manifests...${NC}"
 
-# Create deployment.yaml (without hardcoded image tag)
+# ═══════════════════════════════════════════════════════════════
+# CREATE DEPLOYMENT.YAML
+# ═══════════════════════════════════════════════════════════════
 cat > "${BASE_DIR}/deployment.yaml" <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -63,6 +94,19 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+EOF
+
+# Add envFrom if external secret is enabled
+if [ "$SKIP_EXTERNAL_SECRET" != "true" ]; then
+    cat >> "${BASE_DIR}/deployment.yaml" <<EOF
+        envFrom:
+        - secretRef:
+            name: ${SERVICE_NAME}-secrets
+EOF
+fi
+
+# Add probes
+cat >> "${BASE_DIR}/deployment.yaml" <<EOF
         livenessProbe:
           httpGet:
             path: /health
@@ -77,7 +121,9 @@ spec:
           periodSeconds: 5
 EOF
 
-# Create service.yaml
+# ═══════════════════════════════════════════════════════════════
+# CREATE SERVICE.YAML
+# ═══════════════════════════════════════════════════════════════
 cat > "${BASE_DIR}/service.yaml" <<EOF
 apiVersion: v1
 kind: Service
@@ -96,7 +142,9 @@ spec:
     name: http
 EOF
 
-# Create ingress.yaml
+# ═══════════════════════════════════════════════════════════════
+# CREATE INGRESS.YAML
+# ═══════════════════════════════════════════════════════════════
 cat > "${BASE_DIR}/ingress.yaml" <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -119,7 +167,9 @@ spec:
               number: 80
 EOF
 
-# Create hpa.yaml
+# ═══════════════════════════════════════════════════════════════
+# CREATE HPA.YAML
+# ═══════════════════════════════════════════════════════════════
 cat > "${BASE_DIR}/hpa.yaml" <<EOF
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -149,8 +199,61 @@ spec:
         averageUtilization: 80
 EOF
 
-# Create external-secret.yaml
-cat > "${BASE_DIR}/external-secret.yaml" <<EOF
+# ═══════════════════════════════════════════════════════════════
+# CREATE EXTERNAL-SECRET.YAML (CONFIGURABLE)
+# ═══════════════════════════════════════════════════════════════
+if [ "$SKIP_EXTERNAL_SECRET" != "true" ]; then
+    echo -e "${YELLOW}🔐 Creating external secret configuration...${NC}"
+    
+    # Determine secret store configuration based on type
+    case "$SECRET_STORE_TYPE" in
+        aws)
+            STORE_NAME="aws-secret-store"
+            STORE_KIND="ClusterSecretStore"
+            SECRET_PATH_PREFIX="/dev/${SERVICE_NAME}"
+            ;;
+        vault)
+            STORE_NAME="vault-secret-store"
+            STORE_KIND="ClusterSecretStore"
+            SECRET_PATH_PREFIX="secret/data/dev/${SERVICE_NAME}"
+            ;;
+        gcp)
+            STORE_NAME="gcp-secret-store"
+            STORE_KIND="ClusterSecretStore"
+            SECRET_PATH_PREFIX="projects/my-project/secrets"
+            ;;
+        *)
+            echo -e "${RED}❌ Unknown secret store type: ${SECRET_STORE_TYPE}${NC}"
+            echo "Supported types: aws, vault, gcp"
+            exit 1
+            ;;
+    esac
+    
+    # Build the data section based on secret keys
+    SECRET_DATA=""
+    IFS=',' read -ra KEYS_ARRAY <<< "$SECRET_KEYS"
+    for KEY in "${KEYS_ARRAY[@]}"; do
+        KEY=$(echo "$KEY" | xargs)  # trim whitespace
+        
+        case "$SECRET_STORE_TYPE" in
+            aws|vault)
+                SECRET_DATA="${SECRET_DATA}
+  - secretKey: ${KEY}
+    remoteRef:
+      key: ${SECRET_PATH_PREFIX}
+      property: ${KEY}"
+                ;;
+            gcp)
+                SECRET_DATA="${SECRET_DATA}
+  - secretKey: ${KEY}
+    remoteRef:
+      key: ${SECRET_PATH_PREFIX}/${KEY}
+      version: latest"
+                ;;
+        esac
+    done
+    
+    cat > "${BASE_DIR}/external-secret.yaml" <<EOF
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -160,29 +263,41 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: aws-secret-store
-    kind: ClusterSecretStore
+    name: ${STORE_NAME}
+    kind: ${STORE_KIND}
   target:
     name: ${SERVICE_NAME}-secrets
     creationPolicy: Owner
-  data:
-  - secretKey: database-url
-    remoteRef:
-      key: /dev/${SERVICE_NAME}/database
-      property: url
+  data:${SECRET_DATA}
 EOF
+    
+    echo -e "${GREEN}  ✅ External secret created with store type: ${SECRET_STORE_TYPE}${NC}"
+    echo -e "${GREEN}  ✅ Secret keys: ${SECRET_KEYS}${NC}"
+else
+    echo -e "${BLUE}  ℹ️  Skipping external secret generation${NC}"
+fi
 
-# Create kustomization.yaml (without field images:)
+# ═══════════════════════════════════════════════════════════════
+# CREATE KUSTOMIZATION.YAML (BASE)
+# ═══════════════════════════════════════════════════════════════
+
+# Build resources list
+RESOURCES="  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml"
+
+if [ "$SKIP_EXTERNAL_SECRET" != "true" ]; then
+    RESOURCES="${RESOURCES}
+  - external-secret.yaml"
+fi
+
 cat > "${BASE_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - deployment.yaml
-  - service.yaml
-  - ingress.yaml
-  - hpa.yaml
-  - external-secret.yaml
+${RESOURCES}
 
 components:
   - ../../components/security-hardening
@@ -193,7 +308,10 @@ EOF
 echo -e "${GREEN}✅ Base manifests created in ${BASE_DIR}${NC}"
 echo ""
 
-# Create environment overlays
+# ═══════════════════════════════════════════════════════════════
+# CREATE ENVIRONMENT OVERLAYS
+# ═══════════════════════════════════════════════════════════════
+
 for ENV in dev staging prod; do
     ENV_DIR="environments/${ENV}/${SERVICE_NAME}"
     PATCHES_DIR="${ENV_DIR}/patches"
@@ -207,7 +325,7 @@ for ENV in dev staging prod; do
     elif [ "$ENV" == "staging" ]; then
         IMAGE_TAG="staging-latest"
     else
-        IMAGE_TAG="latest"  # Prod will be updated by manual or via release workflow
+        IMAGE_TAG="latest"
     fi
     
     if [ "$ENV" == "prod" ]; then
@@ -215,7 +333,6 @@ for ENV in dev staging prod; do
         # PRODUCTION: Dedicated namespace with isolation resources
         # ═══════════════════════════════════════════════════════════════
         
-        # Create namespace.yaml
         cat > "${ENV_DIR}/namespace.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
@@ -227,7 +344,6 @@ metadata:
     tier: backend
 EOF
 
-        # Create resource-quota.yaml
         cat > "${ENV_DIR}/resource-quota.yaml" <<EOF
 apiVersion: v1
 kind: ResourceQuota
@@ -246,7 +362,6 @@ spec:
     secrets: "10"
 EOF
 
-        # Create limit-range.yaml
         cat > "${ENV_DIR}/limit-range.yaml" <<EOF
 apiVersion: v1
 kind: LimitRange
@@ -270,7 +385,6 @@ spec:
     type: Container
 EOF
 
-        # Create network-policy.yaml
         cat > "${ENV_DIR}/network-policy.yaml" <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -311,7 +425,6 @@ spec:
           environment: prod
 EOF
 
-        # Create pod-disruption-budget.yaml
         cat > "${ENV_DIR}/pod-disruption-budget.yaml" <<EOF
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -325,7 +438,6 @@ spec:
       app: ${SERVICE_NAME}
 EOF
 
-        # Create kustomization.yaml for prod (DENGAN field images:)
         cat > "${ENV_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -358,7 +470,6 @@ EOF
         # DEV/STAGING: Shared namespace (simpler)
         # ═══════════════════════════════════════════════════════════════
         
-        # Create kustomization.yaml for dev/staging (DENGAN field images:)
         cat > "${ENV_DIR}/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -368,7 +479,7 @@ namespace: ${ENV}
 resources:
   - ../../../bases/${SERVICE_NAME}
 
-# Image tag untuk ${ENV} (akan di-update otomatis oleh CI workflow)
+# Image tag for ${ENV} (will be auto-updated by CI workflow)
 images:
   - name: ${IMAGE_NAME}
     newTag: ${IMAGE_TAG}
@@ -385,18 +496,37 @@ EOF
     fi
     
     # ═══════════════════════════════════════════════════════════════
-    # COMMON: Patches for all environment (without image override)
+    # COMMON: Patches for all environment
     # ═══════════════════════════════════════════════════════════════
     
-    # Create deployment-patch.yaml (without image override)
+    # Determine environment-specific values
     if [ "$ENV" == "dev" ]; then
         LOG_LEVEL="debug"
+        CPU_REQ="50m"
+        MEM_REQ="64Mi"
+        CPU_LIM="200m"
+        MEM_LIM="256Mi"
+        MIN_REPLICAS=1
+        MAX_REPLICAS=3
     elif [ "$ENV" == "staging" ]; then
         LOG_LEVEL="info"
+        CPU_REQ="100m"
+        MEM_REQ="128Mi"
+        CPU_LIM="500m"
+        MEM_LIM="512Mi"
+        MIN_REPLICAS=2
+        MAX_REPLICAS=5
     else
         LOG_LEVEL="warn"
+        CPU_REQ="200m"
+        MEM_REQ="256Mi"
+        CPU_LIM="1000m"
+        MEM_LIM="1Gi"
+        MIN_REPLICAS=3
+        MAX_REPLICAS=10
     fi
     
+    # Create deployment-patch.yaml
     cat > "${PATCHES_DIR}/deployment-patch.yaml" <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -440,17 +570,6 @@ spec:
 EOF
 
     # Create hpa-patch.yaml
-    if [ "$ENV" == "dev" ]; then
-        MIN_REPLICAS=1
-        MAX_REPLICAS=3
-    elif [ "$ENV" == "staging" ]; then
-        MIN_REPLICAS=2
-        MAX_REPLICAS=5
-    else
-        MIN_REPLICAS=3
-        MAX_REPLICAS=10
-    fi
-    
     cat > "${PATCHES_DIR}/hpa-patch.yaml" <<EOF
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -462,23 +581,6 @@ spec:
 EOF
 
     # Create resource-patch.yaml
-    if [ "$ENV" == "dev" ]; then
-        CPU_REQ="50m"
-        MEM_REQ="64Mi"
-        CPU_LIM="200m"
-        MEM_LIM="256Mi"
-    elif [ "$ENV" == "staging" ]; then
-        CPU_REQ="100m"
-        MEM_REQ="128Mi"
-        CPU_LIM="500m"
-        MEM_LIM="512Mi"
-    else
-        CPU_REQ="200m"
-        MEM_REQ="256Mi"
-        CPU_LIM="1000m"
-        MEM_LIM="1Gi"
-    fi
-    
     cat > "${PATCHES_DIR}/resource-patch.yaml" <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -537,6 +639,8 @@ echo ""
 echo -e "${YELLOW}📋 Summary:${NC}"
 echo "  Service: ${SERVICE_NAME}"
 echo "  Image: ${IMAGE_NAME}"
+echo "  Secret Store: ${SECRET_STORE_TYPE}"
+echo "  Secret Keys: ${SECRET_KEYS}"
 echo ""
 echo -e "${YELLOW}🏷️  Image Tags per Environment:${NC}"
 echo "  Dev:     ${IMAGE_NAME}:dev-latest (auto-update via CI)"
@@ -545,14 +649,49 @@ echo "  Prod:    ${IMAGE_NAME}:latest (manual or release workflow)"
 echo ""
 echo -e "${YELLOW}📁 Files created:${NC}"
 echo "  ✅ bases/${SERVICE_NAME}/"
+if [ "$SKIP_EXTERNAL_SECRET" != "true" ]; then
+    echo "     └── external-secret.yaml (${SECRET_STORE_TYPE} store)"
+fi
 echo "  ✅ environments/dev/${SERVICE_NAME}/ (shared namespace: dev)"
 echo "  ✅ environments/staging/${SERVICE_NAME}/ (shared namespace: staging)"
 echo "  ✅ environments/prod/${SERVICE_NAME}/ (dedicated namespace: prod-${SERVICE_NAME})"
 echo ""
+echo -e "${YELLOW}🔐 External Secrets Configuration:${NC}"
+if [ "$SKIP_EXTERNAL_SECRET" != "true" ]; then
+    echo "  Store Type: ${SECRET_STORE_TYPE}"
+    echo "  Store Name: $(case "$SECRET_STORE_TYPE" in aws) echo "aws-secret-store";; vault) echo "vault-secret-store";; gcp) echo "gcp-secret-store";; esac)"
+    echo "  Secret Keys:"
+    IFS=',' read -ra KEYS_ARRAY <<< "$SECRET_KEYS"
+    for KEY in "${KEYS_ARRAY[@]}"; do
+        KEY=$(echo "$KEY" | xargs)
+        echo "    - ${KEY}"
+    done
+    echo ""
+    echo -e "${YELLOW}⚠️  Important: Ensure the following secrets exist in your secret manager:${NC}"
+    IFS=',' read -ra KEYS_ARRAY <<< "$SECRET_KEYS"
+    for KEY in "${KEYS_ARRAY[@]}"; do
+        KEY=$(echo "$KEY" | xargs)
+        case "$SECRET_STORE_TYPE" in
+            aws)
+                echo "    AWS Secrets Manager: /dev/${SERVICE_NAME} → property: ${KEY}"
+                ;;
+            vault)
+                echo "    Vault: secret/data/dev/${SERVICE_NAME} → field: ${KEY}"
+                ;;
+            gcp)
+                echo "    GCP Secret Manager: projects/my-project/secrets/${KEY}"
+                ;;
+        esac
+    done
+else
+    echo "  ⏭️  Skipped - no external secret will be created"
+fi
+echo ""
 echo -e "${YELLOW}🚀 Next steps:${NC}"
 echo "  1. Review and customize the generated manifests"
-echo "  2. Setup CI workflow in application repo to call shared workflow"
-echo "  3. Commit and create a Pull Request:"
+echo "  2. Ensure secrets exist in your secret manager (${SECRET_STORE_TYPE})"
+echo "  3. Setup CI workflow in application repo to call shared workflow"
+echo "  4. Commit and create a Pull Request:"
 echo ""
 echo -e "${BLUE}     git add .${NC}"
 echo -e "${BLUE}     git commit -m \"feat: add ${SERVICE_NAME}\"${NC}"

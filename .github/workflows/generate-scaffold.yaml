@@ -42,6 +42,20 @@ on:
         required: true
         type: boolean
         default: true
+      secret-store-type:
+        description: 'Secret store type (aws/vault/gcp)'
+        required: false
+        type: choice
+        options:
+          - 'aws'
+          - 'vault'
+          - 'gcp'
+        default: 'aws'
+      secret-keys:
+        description: 'Comma-separated secret keys (e.g., database-url,api-key,redis-password)'
+        required: false
+        type: string
+        default: 'database-url,api-key'
       custom-port:
         description: 'Container port (default: 8080)'
         required: false
@@ -87,6 +101,14 @@ on:
         required: false
         type: boolean
         default: true
+      secret-store-type:
+        required: false
+        type: string
+        default: 'aws'
+      secret-keys:
+        required: false
+        type: string
+        default: 'database-url,api-key'
       custom-port:
         required: false
         type: string
@@ -130,9 +152,20 @@ jobs:
             exit 1
           fi
           
+          SERVICE_NAME="${{ inputs.service-name }}"
           if [ ${#SERVICE_NAME} -gt 63 ]; then
             echo "❌ Service name too long (max 63 characters)"
             exit 1
+          fi
+          
+          # Validate secret store type
+          if [ "${{ inputs.include-external-secret }}" == "true" ]; then
+            STORE_TYPE="${{ inputs.secret-store-type }}"
+            if [[ "$STORE_TYPE" != "aws" && "$STORE_TYPE" != "vault" && "$STORE_TYPE" != "gcp" ]]; then
+              echo "❌ Invalid secret store type: $STORE_TYPE"
+              echo "Supported types: aws, vault, gcp"
+              exit 1
+            fi
           fi
           
           # Check if service already exists
@@ -151,6 +184,10 @@ jobs:
           echo "  Include Ingress: ${{ inputs.include-ingress }}"
           echo "  Include HPA: ${{ inputs.include-hpa }}"
           echo "  Include ExternalSecret: ${{ inputs.include-external-secret }}"
+          if [ "${{ inputs.include-external-secret }}" == "true" ]; then
+            echo "  Secret Store Type: ${{ inputs.secret-store-type }}"
+            echo "  Secret Keys: ${{ inputs.secret-keys }}"
+          fi
           echo "  Container Port: ${{ inputs.custom-port }}"
           echo "  Health Check: ${{ inputs.health-check-path }}"
           echo "  Readiness Check: ${{ inputs.readiness-check-path }}"
@@ -165,6 +202,9 @@ jobs:
           HEALTH_PATH="${{ inputs.health-check-path }}"
           READINESS_PATH="${{ inputs.readiness-check-path }}"
           ENVIRONMENTS="${{ inputs.environments }}"
+          INCLUDE_EXTERNAL_SECRET="${{ inputs.include-external-secret }}"
+          SECRET_STORE_TYPE="${{ inputs.secret-store-type }}"
+          SECRET_KEYS="${{ inputs.secret-keys }}"
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🚀 Generating scaffold for: $SERVICE_NAME"
@@ -211,6 +251,19 @@ jobs:
                     valueFrom:
                       fieldRef:
                         fieldPath: metadata.namespace
+          EOF
+          
+          # Add envFrom if external secret is enabled
+          if [ "$INCLUDE_EXTERNAL_SECRET" == "true" ]; then
+            cat >> "${BASE_DIR}/deployment.yaml" <<EOF
+                  envFrom:
+                  - secretRef:
+                      name: ${SERVICE_NAME}-secrets
+          EOF
+          fi
+          
+          # Add probes
+          cat >> "${BASE_DIR}/deployment.yaml" <<EOF
                   livenessProbe:
                     httpGet:
                       path: ${HEALTH_PATH}
@@ -309,8 +362,57 @@ jobs:
             - hpa.yaml"
           fi
           
-          # external-secret.yaml (optional)
-          if [ "${{ inputs.include-external-secret }}" == "true" ]; then
+          # external-secret.yaml (optional with configurable store type)
+          if [ "$INCLUDE_EXTERNAL_SECRET" == "true" ]; then
+            echo "🔐 Creating external secret configuration..."
+            
+            # Determine secret store configuration based on type
+            case "$SECRET_STORE_TYPE" in
+              aws)
+                STORE_NAME="aws-secret-store"
+                STORE_KIND="ClusterSecretStore"
+                SECRET_PATH_PREFIX="/dev/${SERVICE_NAME}"
+                ;;
+              vault)
+                STORE_NAME="vault-secret-store"
+                STORE_KIND="ClusterSecretStore"
+                SECRET_PATH_PREFIX="secret/data/dev/${SERVICE_NAME}"
+                ;;
+              gcp)
+                STORE_NAME="gcp-secret-store"
+                STORE_KIND="ClusterSecretStore"
+                SECRET_PATH_PREFIX="projects/my-project/secrets"
+                ;;
+              *)
+                echo "❌ Unknown secret store type: ${SECRET_STORE_TYPE}"
+                exit 1
+                ;;
+            esac
+            
+            # Build the data section based on secret keys
+            SECRET_DATA=""
+            IFS=',' read -ra KEYS_ARRAY <<< "$SECRET_KEYS"
+            for KEY in "${KEYS_ARRAY[@]}"; do
+              KEY=$(echo "$KEY" | xargs)  # trim whitespace
+              
+              case "$SECRET_STORE_TYPE" in
+                aws|vault)
+                  SECRET_DATA="${SECRET_DATA}
+            - secretKey: ${KEY}
+              remoteRef:
+                key: ${SECRET_PATH_PREFIX}
+                property: ${KEY}"
+                  ;;
+                gcp)
+                  SECRET_DATA="${SECRET_DATA}
+            - secretKey: ${KEY}
+              remoteRef:
+                key: ${SECRET_PATH_PREFIX}/${KEY}
+                version: latest"
+                  ;;
+              esac
+            done
+            
             cat > "${BASE_DIR}/external-secret.yaml" <<EOF
           apiVersion: external-secrets.io/v1beta1
           kind: ExternalSecret
@@ -321,19 +423,19 @@ jobs:
           spec:
             refreshInterval: 1h
             secretStoreRef:
-              name: aws-secret-store
-              kind: ClusterSecretStore
+              name: ${STORE_NAME}
+              kind: ${STORE_KIND}
             target:
               name: ${SERVICE_NAME}-secrets
               creationPolicy: Owner
-            data:
-            - secretKey: database-url
-              remoteRef:
-                key: /dev/${SERVICE_NAME}/database
-                property: url
+            data:${SECRET_DATA}
           EOF
+            
             RESOURCES="${RESOURCES}
             - external-secret.yaml"
+            
+            echo "  ✅ External secret created with store type: ${SECRET_STORE_TYPE}"
+            echo "  ✅ Secret keys: ${SECRET_KEYS}"
           fi
           
           # kustomization.yaml
@@ -638,9 +740,14 @@ jobs:
           echo "🔍 Validating generated manifests..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Install kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
+          # Setup Kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash || {
+            echo "⚠️  Direct install failed, using pre-installed kustomize"
+          }
+          
+          if ! command -v kustomize &> /dev/null; then
+            sudo mv kustomize /usr/local/bin/
+          fi
           
           # Validate each environment
           IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
@@ -685,6 +792,7 @@ jobs:
           - Service: ${{ inputs.service-name }}
           - Image: ${{ inputs.image-name }}
           - Environments: ${{ inputs.environments }}
+          - External Secret: ${{ inputs.include-external-secret }} (${{ inputs.secret-store-type }})
           - Generated by: ${{ github.actor }}
           - Workflow: ${{ github.workflow }}"
           
@@ -696,6 +804,42 @@ jobs:
         if: inputs.create-pr == true
         run: |
           PR_TITLE="🆕 Add ${{ inputs.service-name }} scaffold"
+          
+          # Build external secret section for PR body
+          if [ "${{ inputs.include-external-secret }}" == "true" ]; then
+            EXTERNAL_SECRET_SECTION="
+          #### External Secret Configuration
+          - **Store Type:** \`${{ inputs.secret-store-type }}\`
+          - **Store Name:** \`$(case "${{ inputs.secret-store-type }}" in aws) echo "aws-secret-store";; vault) echo "vault-secret-store";; gcp) echo "gcp-secret-store";; esac)\`
+          - **Secret Keys:**
+          $(IFS=',' read -ra KEYS_ARRAY <<< "${{ inputs.secret-keys }}"
+          for KEY in "${KEYS_ARRAY[@]}"; do
+            KEY=$(echo "$KEY" | xargs)
+            echo "    - \`${KEY}\`"
+          done)
+          
+          **⚠️ Important:** Ensure the following secrets exist in your secret manager:
+          $(IFS=',' read -ra KEYS_ARRAY <<< "${{ inputs.secret-keys }}"
+          for KEY in "${KEYS_ARRAY[@]}"; do
+            KEY=$(echo "$KEY" | xargs)
+            case "${{ inputs.secret-store-type }}" in
+              aws)
+                echo "- AWS Secrets Manager: \`/dev/${{ inputs.service-name }}\` → property: \`${KEY}\`"
+                ;;
+              vault)
+                echo "- Vault: \`secret/data/dev/${{ inputs.service-name }}\` → field: \`${KEY}\`"
+                ;;
+              gcp)
+                echo "- GCP Secret Manager: \`projects/my-project/secrets/${KEY}\`"
+                ;;
+            esac
+          done)"
+          else
+            EXTERNAL_SECRET_SECTION="
+          #### External Secret Configuration
+          - ⏭️ Skipped - no external secret will be created"
+          fi
+          
           PR_BODY="## New Service Scaffold
           
           ### Service Details
@@ -714,6 +858,8 @@ jobs:
           $([ "${{ inputs.include-external-secret }}" == "true" ] && echo "- \`bases/${{ inputs.service-name }}/external-secret.yaml\`")
           - \`bases/${{ inputs.service-name }}/kustomization.yaml\`
           
+          ${EXTERNAL_SECRET_SECTION}
+          
           #### Environment Overlays
           $(IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
           for ENV in "${ENV_ARRAY[@]}"; do
@@ -728,6 +874,7 @@ jobs:
           ### Next Steps
           - [ ] Review generated manifests
           - [ ] Customize environment-specific values if needed
+          $([ "${{ inputs.include-external-secret }}" == "true" ] && echo "- [ ] Ensure secrets exist in your secret manager (${{ inputs.secret-store-type }})")
           - [ ] Verify ArgoCD ApplicationSet will detect new service
           - [ ] Merge to trigger deployment to dev/staging
           - [ ] For production: manually sync in ArgoCD UI
@@ -766,6 +913,7 @@ jobs:
           
           - Service: ${{ inputs.service-name }}
           - Image: ${{ inputs.image-name }}
+          - External Secret: ${{ inputs.include-external-secret }} (${{ inputs.secret-store-type }})
           - Generated by: ${{ github.actor }}"
           
           git push origin master
@@ -794,6 +942,37 @@ jobs:
               echo "  ✅ environments/${ENV}/${{ inputs.service-name }}/ (shared namespace)"
             fi
           done
+          
+          echo ""
+          if [ "${{ inputs.include-external-secret }}" == "true" ]; then
+            echo "External Secret Configuration:"
+            echo "  Store Type: ${{ inputs.secret-store-type }}"
+            echo "  Secret Keys:"
+            IFS=',' read -ra KEYS_ARRAY <<< "${{ inputs.secret-keys }}"
+            for KEY in "${KEYS_ARRAY[@]}"; do
+              KEY=$(echo "$KEY" | xargs)
+              echo "    - ${KEY}"
+            done
+            echo ""
+            echo "⚠️  Important: Ensure secrets exist in your secret manager:"
+            IFS=',' read -ra KEYS_ARRAY <<< "${{ inputs.secret-keys }}"
+            for KEY in "${KEYS_ARRAY[@]}"; do
+              KEY=$(echo "$KEY" | xargs)
+              case "${{ inputs.secret-store-type }}" in
+                aws)
+                  echo "    AWS Secrets Manager: /dev/${{ inputs.service-name }} → property: ${KEY}"
+                  ;;
+                vault)
+                  echo "    Vault: secret/data/dev/${{ inputs.service-name }} → field: ${KEY}"
+                  ;;
+                gcp)
+                  echo "    GCP Secret Manager: projects/my-project/secrets/${KEY}"
+                  ;;
+              esac
+            done
+          else
+            echo "External Secret: ⏭️ Skipped"
+          fi
           
           echo ""
           if [ "${{ inputs.create-pr }}" == "true" ]; then
