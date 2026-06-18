@@ -245,7 +245,7 @@ jobs:
           EOF
           
           # Build resources list for kustomization.yaml
-          RESOURCES="- deployment.yaml
+          RESOURCES="  - deployment.yaml
             - service.yaml"
           
           # ingress.yaml (optional)
@@ -377,8 +377,8 @@ jobs:
               IMAGE_TAG="latest"
             fi
             
-            # Build patches list
-            PATCHES="- path: patches/deployment-patch.yaml
+            # Build patches list (ALL items indented consistently with 2 spaces)
+            PATCHES="  - path: patches/deployment-patch.yaml
               - path: patches/resource-patch.yaml"
             
             if [ "${{ inputs.include-ingress }}" == "true" ]; then
