@@ -156,16 +156,12 @@ jobs:
 
           git checkout -b "$BRANCH_NAME"
 
-          if [ -d "bases/${{ inputs.service-name }}" ]; then
-            git add "bases/${{ inputs.service-name }}"
-          else
+          if git ls-files --error-unmatch "bases/${{ inputs.service-name }}" >/dev/null 2>&1 || [ -e "bases/${{ inputs.service-name }}" ]; then
             git add -A "bases/${{ inputs.service-name }}"
           fi
 
           for ENV in dev staging prod; do
-            if [ -d "environments/${ENV}/${{ inputs.service-name }}" ]; then
-              git add "environments/${ENV}/${{ inputs.service-name }}"
-            else
+            if git ls-files --error-unmatch "environments/${ENV}/${{ inputs.service-name }}" >/dev/null 2>&1 || [ -e "environments/${ENV}/${{ inputs.service-name }}" ]; then
               git add -A "environments/${ENV}/${{ inputs.service-name }}"
             fi
             git add "environments/${ENV}/kustomization.yaml"
@@ -230,16 +226,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -d "bases/${{ inputs.service-name }}" ]; then
-            git add "bases/${{ inputs.service-name }}"
-          else
+          if git ls-files --error-unmatch "bases/${{ inputs.service-name }}" >/dev/null 2>&1 || [ -e "bases/${{ inputs.service-name }}" ]; then
             git add -A "bases/${{ inputs.service-name }}"
           fi
 
           for ENV in dev staging prod; do
-            if [ -d "environments/${ENV}/${{ inputs.service-name }}" ]; then
-              git add "environments/${ENV}/${{ inputs.service-name }}"
-            else
+            if git ls-files --error-unmatch "environments/${ENV}/${{ inputs.service-name }}" >/dev/null 2>&1 || [ -e "environments/${ENV}/${{ inputs.service-name }}" ]; then
               git add -A "environments/${ENV}/${{ inputs.service-name }}"
             fi
             git add "environments/${ENV}/kustomization.yaml"
