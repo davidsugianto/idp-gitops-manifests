@@ -487,25 +487,20 @@ jobs:
             fi
 
             # ═══════════════════════════════════════════════════════════════
-            # BUILD PATCHES LIST - ALL ITEMS WITH CONSISTENT 2-SPACE INDENT
+            # BUILD PATCHES LIST
             # ═══════════════════════════════════════════════════════════════
 
-            cat > "${ENV_DIR}/kustomization.yaml" <<EOF
-            patches:
-              - path: patches/deployment-patch.yaml
-              - path: patches/resource-patch.yaml
-            EOF
+            PATCHES="  - path: patches/deployment-patch.yaml
+              - path: patches/resource-patch.yaml"
 
             if [ "$INCLUDE_INGRESS" == "true" ]; then
-              cat >> "${ENV_DIR}/kustomization.yaml" <<EOF
-              - path: patches/ingress-patch.yaml
-            EOF
+              PATCHES="${PATCHES}
+              - path: patches/ingress-patch.yaml"
             fi
 
             if [ "$INCLUDE_HPA" == "true" ]; then
-              cat >> "${ENV_DIR}/kustomization.yaml" <<EOF
-              - path: patches/hpa-patch.yaml
-            EOF
+              PATCHES="${PATCHES}
+              - path: patches/hpa-patch.yaml"
             fi
 
             if [ "$ENV" == "prod" ]; then
