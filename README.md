@@ -24,9 +24,25 @@ Centralized GitOps repository for managing all microservices deployments using A
 
 ## 🚀 Adding a New Service
 
+`./scripts/generate-service-scaffold.sh` is the single source of truth for scaffold generation. The GitHub Actions workflow delegates manifest generation to this script.
+
 ```bash
-# Generate scaffold for new service
+# Generate scaffold for new service with legacy positional args
 ./scripts/generate-service-scaffold.sh my-new-service ghcr.io/my-org
+
+# Or use flags to match the GitHub workflow inputs
+./scripts/generate-service-scaffold.sh \
+  --service-name my-new-service \
+  --image-name ghcr.io/my-org/my-new-service \
+  --environments dev,staging,prod \
+  --include-ingress true \
+  --include-hpa true \
+  --include-external-secret true \
+  --secret-store-type aws \
+  --secret-keys database-url,api-key \
+  --port 8080 \
+  --health-check-path /health \
+  --readiness-check-path /ready
 
 # Customize the generated files
 # Then commit and create PR
