@@ -13,3 +13,4 @@ resources:
   # Per-service overlays (will be updated by scaffold script)
   # Add new service here
   - go-http-server
+  - testapp
