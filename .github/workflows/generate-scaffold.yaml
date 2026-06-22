@@ -71,7 +71,7 @@ on:
         required: false
         type: string
         default: '/ready'
-  
+
   # Automated trigger from other workflows (optional)
   workflow_call:
     inputs:
@@ -129,19 +129,24 @@ jobs:
   generate-scaffold:
     name: Generate Service Scaffold
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: '5.3.0'
+
       - name: Validate inputs
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔍 Validating inputs..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
+
           # Validate service name (Kubernetes naming rules)
           if [[ ! "${{ inputs.service-name }}" =~ ^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$ ]]; then
             echo "❌ Invalid service name: ${{ inputs.service-name }}"
@@ -151,13 +156,13 @@ jobs:
             echo "  - Be max 63 characters"
             exit 1
           fi
-          
+
           SERVICE_NAME="${{ inputs.service-name }}"
           if [ ${#SERVICE_NAME} -gt 63 ]; then
             echo "❌ Service name too long (max 63 characters)"
             exit 1
           fi
-          
+
           # Validate secret store type
           if [ "${{ inputs.include-external-secret }}" == "true" ]; then
             STORE_TYPE="${{ inputs.secret-store-type }}"
@@ -167,13 +172,13 @@ jobs:
               exit 1
             fi
           fi
-          
+
           # Check if service already exists
           if [ -d "bases/${{ inputs.service-name }}" ]; then
             echo "⚠️  Warning: Service '${{ inputs.service-name }}' already exists in bases/"
             echo "This will overwrite existing files!"
           fi
-          
+
           echo "✅ All inputs validated"
           echo ""
           echo "📋 Configuration:"
@@ -205,21 +210,23 @@ jobs:
           INCLUDE_EXTERNAL_SECRET="${{ inputs.include-external-secret }}"
           SECRET_STORE_TYPE="${{ inputs.secret-store-type }}"
           SECRET_KEYS="${{ inputs.secret-keys }}"
-          
+          INCLUDE_INGRESS="${{ inputs.include-ingress }}"
+          INCLUDE_HPA="${{ inputs.include-hpa }}"
+
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🚀 Generating scaffold for: $SERVICE_NAME"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          
+
           # ═══════════════════════════════════════════════════════════════
           # CREATE BASE MANIFESTS
           # ═══════════════════════════════════════════════════════════════
-          
+
           BASE_DIR="bases/${SERVICE_NAME}"
           mkdir -p "${BASE_DIR}"
-          
+
           echo "📦 Creating base manifests..."
-          
+
           # deployment.yaml
           cat > "${BASE_DIR}/deployment.yaml" <<EOF
           apiVersion: apps/v1
@@ -252,7 +259,7 @@ jobs:
                       fieldRef:
                         fieldPath: metadata.namespace
           EOF
-          
+
           # Add envFrom if external secret is enabled
           if [ "$INCLUDE_EXTERNAL_SECRET" == "true" ]; then
             cat >> "${BASE_DIR}/deployment.yaml" <<EOF
@@ -261,7 +268,7 @@ jobs:
                       name: ${SERVICE_NAME}-secrets
           EOF
           fi
-          
+
           # Add probes
           cat >> "${BASE_DIR}/deployment.yaml" <<EOF
                   livenessProbe:
@@ -277,7 +284,7 @@ jobs:
                     initialDelaySeconds: 5
                     periodSeconds: 5
           EOF
-          
+
           # service.yaml
           cat > "${BASE_DIR}/service.yaml" <<EOF
           apiVersion: v1
@@ -296,13 +303,13 @@ jobs:
               protocol: TCP
               name: http
           EOF
-          
-          # Build resources list for kustomization.yaml
-          RESOURCES="  - deployment.yaml
-            - service.yaml"
-          
+
+          # Build resources list for base kustomization.yaml
+          RESOURCES="- deployment.yaml
+          - service.yaml"
+
           # ingress.yaml (optional)
-          if [ "${{ inputs.include-ingress }}" == "true" ]; then
+          if [ "$INCLUDE_INGRESS" == "true" ]; then
             cat > "${BASE_DIR}/ingress.yaml" <<EOF
           apiVersion: networking.k8s.io/v1
           kind: Ingress
@@ -325,11 +332,11 @@ jobs:
                         number: 80
           EOF
             RESOURCES="${RESOURCES}
-            - ingress.yaml"
+          - ingress.yaml"
           fi
-          
+
           # hpa.yaml (optional)
-          if [ "${{ inputs.include-hpa }}" == "true" ]; then
+          if [ "$INCLUDE_HPA" == "true" ]; then
             cat > "${BASE_DIR}/hpa.yaml" <<EOF
           apiVersion: autoscaling/v2
           kind: HorizontalPodAutoscaler
@@ -359,13 +366,13 @@ jobs:
                   averageUtilization: 80
           EOF
             RESOURCES="${RESOURCES}
-            - hpa.yaml"
+          - hpa.yaml"
           fi
-          
+
           # external-secret.yaml (optional with configurable store type)
           if [ "$INCLUDE_EXTERNAL_SECRET" == "true" ]; then
             echo "🔐 Creating external secret configuration..."
-            
+
             # Determine secret store configuration based on type
             case "$SECRET_STORE_TYPE" in
               aws)
@@ -388,31 +395,31 @@ jobs:
                 exit 1
                 ;;
             esac
-            
+
             # Build the data section based on secret keys
             SECRET_DATA=""
             IFS=',' read -ra KEYS_ARRAY <<< "$SECRET_KEYS"
             for KEY in "${KEYS_ARRAY[@]}"; do
               KEY=$(echo "$KEY" | xargs)  # trim whitespace
-              
+
               case "$SECRET_STORE_TYPE" in
                 aws|vault)
                   SECRET_DATA="${SECRET_DATA}
-            - secretKey: ${KEY}
-              remoteRef:
-                key: ${SECRET_PATH_PREFIX}
-                property: ${KEY}"
+          - secretKey: ${KEY}
+            remoteRef:
+              key: ${SECRET_PATH_PREFIX}
+              property: ${KEY}"
                   ;;
                 gcp)
                   SECRET_DATA="${SECRET_DATA}
-            - secretKey: ${KEY}
-              remoteRef:
-                key: ${SECRET_PATH_PREFIX}/${KEY}
-                version: latest"
+          - secretKey: ${KEY}
+            remoteRef:
+              key: ${SECRET_PATH_PREFIX}/${KEY}
+              version: latest"
                   ;;
               esac
             done
-            
+
             cat > "${BASE_DIR}/external-secret.yaml" <<EOF
           apiVersion: external-secrets.io/v1beta1
           kind: ExternalSecret
@@ -430,46 +437,46 @@ jobs:
               creationPolicy: Owner
             data:${SECRET_DATA}
           EOF
-            
+
             RESOURCES="${RESOURCES}
-            - external-secret.yaml"
-            
+          - external-secret.yaml"
+
             echo "  ✅ External secret created with store type: ${SECRET_STORE_TYPE}"
             echo "  ✅ Secret keys: ${SECRET_KEYS}"
           fi
-          
-          # kustomization.yaml
+
+          # base kustomization.yaml
           cat > "${BASE_DIR}/kustomization.yaml" <<EOF
           apiVersion: kustomize.config.k8s.io/v1beta1
           kind: Kustomization
-          
+
           resources:
           ${RESOURCES}
-          
+
           components:
             - ../../components/security-hardening
             - ../../components/observability
             - ../../components/common-labels
           EOF
-          
+
           echo "✅ Base manifests created in ${BASE_DIR}"
           echo ""
-          
+
           # ═══════════════════════════════════════════════════════════════
           # CREATE ENVIRONMENT OVERLAYS
           # ═══════════════════════════════════════════════════════════════
-          
+
           IFS=',' read -ra ENV_ARRAY <<< "$ENVIRONMENTS"
-          
+
           for ENV in "${ENV_ARRAY[@]}"; do
             ENV=$(echo "$ENV" | xargs)  # trim whitespace
-            
+
             ENV_DIR="environments/${ENV}/${SERVICE_NAME}"
             PATCHES_DIR="${ENV_DIR}/patches"
             mkdir -p "${PATCHES_DIR}"
-            
+
             echo "🎨 Creating ${ENV} environment overlay..."
-            
+
             # Determine image tag
             if [ "$ENV" == "dev" ]; then
               IMAGE_TAG="dev-latest"
@@ -478,23 +485,28 @@ jobs:
             else
               IMAGE_TAG="latest"
             fi
-            
-            # Build patches list (ALL items indented consistently with 2 spaces)
+
+            # ═══════════════════════════════════════════════════════════════
+            # BUILD PATCHES LIST - ALL ITEMS WITH CONSISTENT 2-SPACE INDENT
+            # ═══════════════════════════════════════════════════════════════
             PATCHES="  - path: patches/deployment-patch.yaml
-              - path: patches/resource-patch.yaml"
-            
-            if [ "${{ inputs.include-ingress }}" == "true" ]; then
+          - path: patches/resource-patch.yaml"
+
+            if [ "$INCLUDE_INGRESS" == "true" ]; then
               PATCHES="${PATCHES}
-              - path: patches/ingress-patch.yaml"
+          - path: patches/ingress-patch.yaml"
             fi
-            
-            if [ "${{ inputs.include-hpa }}" == "true" ]; then
+
+            if [ "$INCLUDE_HPA" == "true" ]; then
               PATCHES="${PATCHES}
-              - path: patches/hpa-patch.yaml"
+          - path: patches/hpa-patch.yaml"
             fi
-            
+
             if [ "$ENV" == "prod" ]; then
-              # Production: Dedicated namespace with isolation
+              # ═══════════════════════════════════════════════════════════════
+              # PRODUCTION: Dedicated namespace with isolation
+              # ═══════════════════════════════════════════════════════════════
+
               cat > "${ENV_DIR}/namespace.yaml" <<EOF
           apiVersion: v1
           kind: Namespace
@@ -505,7 +517,7 @@ jobs:
               service: ${SERVICE_NAME}
               tier: backend
           EOF
-              
+
               cat > "${ENV_DIR}/resource-quota.yaml" <<EOF
           apiVersion: v1
           kind: ResourceQuota
@@ -520,7 +532,7 @@ jobs:
               limits.memory: 16Gi
               pods: "20"
           EOF
-              
+
               cat > "${ENV_DIR}/limit-range.yaml" <<EOF
           apiVersion: v1
           kind: LimitRange
@@ -537,7 +549,7 @@ jobs:
                 memory: 256Mi
               type: Container
           EOF
-              
+
               cat > "${ENV_DIR}/network-policy.yaml" <<EOF
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
@@ -565,7 +577,7 @@ jobs:
               - protocol: UDP
                 port: 53
           EOF
-              
+
               cat > "${ENV_DIR}/pod-disruption-budget.yaml" <<EOF
           apiVersion: policy/v1
           kind: PodDisruptionBudget
@@ -578,11 +590,11 @@ jobs:
               matchLabels:
                 app: ${SERVICE_NAME}
           EOF
-              
+
               cat > "${ENV_DIR}/kustomization.yaml" <<EOF
           apiVersion: kustomize.config.k8s.io/v1beta1
           kind: Kustomization
-          
+
           resources:
             - namespace.yaml
             - resource-quota.yaml
@@ -590,40 +602,47 @@ jobs:
             - network-policy.yaml
             - pod-disruption-budget.yaml
             - ../../../bases/${SERVICE_NAME}
-          
+
           images:
             - name: ${IMAGE_NAME}
               newTag: ${IMAGE_TAG}
-          
+
           patches:
           ${PATCHES}
           EOF
-              
+
               echo "  ✅ Production: Dedicated namespace (prod-${SERVICE_NAME})"
-              
+
             else
-              # Dev/Staging: Shared namespace
+              # ═══════════════════════════════════════════════════════════════
+              # DEV/STAGING: Shared namespace (simpler)
+              # ═══════════════════════════════════════════════════════════════
+
               cat > "${ENV_DIR}/kustomization.yaml" <<EOF
           apiVersion: kustomize.config.k8s.io/v1beta1
           kind: Kustomization
-          
+
           namespace: ${ENV}
-          
+
           resources:
             - ../../../bases/${SERVICE_NAME}
-          
+
           images:
             - name: ${IMAGE_NAME}
               newTag: ${IMAGE_TAG}
-          
+
           patches:
           ${PATCHES}
           EOF
-              
+
               echo "  ✅ ${ENV}: Shared namespace (${ENV})"
             fi
-            
-            # Create patches
+
+            # ═══════════════════════════════════════════════════════════════
+            # CREATE PATCH FILES
+            # ═══════════════════════════════════════════════════════════════
+
+            # Determine environment-specific values
             if [ "$ENV" == "dev" ]; then
               LOG_LEVEL="debug"
               CPU_REQ="50m"
@@ -649,7 +668,7 @@ jobs:
               MIN_REPLICAS=3
               MAX_REPLICAS=10
             fi
-            
+
             # deployment-patch.yaml
             cat > "${PATCHES_DIR}/deployment-patch.yaml" <<EOF
           apiVersion: apps/v1
@@ -666,7 +685,7 @@ jobs:
                   - name: LOG_LEVEL
                     value: "${LOG_LEVEL}"
           EOF
-            
+
             # resource-patch.yaml
             cat > "${PATCHES_DIR}/resource-patch.yaml" <<EOF
           apiVersion: apps/v1
@@ -686,15 +705,15 @@ jobs:
                       cpu: "${CPU_LIM}"
                       memory: "${MEM_LIM}"
           EOF
-            
+
             # ingress-patch.yaml (if included)
-            if [ "${{ inputs.include-ingress }}" == "true" ]; then
+            if [ "$INCLUDE_INGRESS" == "true" ]; then
               if [ "$ENV" == "prod" ]; then
                 HOST="${SERVICE_NAME}.davidsugianto.com"
               else
                 HOST="${ENV}.${SERVICE_NAME}.davidsugianto.com"
               fi
-              
+
               cat > "${PATCHES_DIR}/ingress-patch.yaml" <<EOF
           apiVersion: networking.k8s.io/v1
           kind: Ingress
@@ -714,9 +733,9 @@ jobs:
                         number: 80
           EOF
             fi
-            
+
             # hpa-patch.yaml (if included)
-            if [ "${{ inputs.include-hpa }}" == "true" ]; then
+            if [ "$INCLUDE_HPA" == "true" ]; then
               cat > "${PATCHES_DIR}/hpa-patch.yaml" <<EOF
           apiVersion: autoscaling/v2
           kind: HorizontalPodAutoscaler
@@ -727,47 +746,57 @@ jobs:
             maxReplicas: ${MAX_REPLICAS}
           EOF
             fi
-            
+
             echo "  ✅ Patches created for ${ENV}"
           done
-          
+
           echo ""
           echo "✅ All environment overlays created"
+
+      - name: Debug generated files
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Debug: Generated kustomization.yaml files"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
+
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "$ENV" | xargs)
+            KUSTOMIZE_FILE="environments/${ENV}/${{ inputs.service-name }}/kustomization.yaml"
+
+            echo ""
+            echo "📄 ${KUSTOMIZE_FILE}:"
+            echo "───────────────────────────────────────────────────"
+            cat "$KUSTOMIZE_FILE"
+            echo "───────────────────────────────────────────────────"
+          done
 
       - name: Validate generated manifests
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔍 Validating generated manifests..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Setup Kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash || {
-            echo "⚠️  Direct install failed, using pre-installed kustomize"
-          }
-          
-          if ! command -v kustomize &> /dev/null; then
-            sudo mv kustomize /usr/local/bin/
-          fi
-          
+
           # Validate each environment
           IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
-          
+
           for ENV in "${ENV_ARRAY[@]}"; do
             ENV=$(echo "$ENV" | xargs)
             KUSTOMIZE_DIR="environments/${ENV}/${{ inputs.service-name }}"
-            
+
             echo ""
             echo "📦 Validating: $KUSTOMIZE_DIR"
-            
+
             if ! kustomize build "$KUSTOMIZE_DIR" > /dev/null 2>&1; then
               echo "❌ Kustomize build failed for $KUSTOMIZE_DIR"
               kustomize build "$KUSTOMIZE_DIR" 2>&1 | sed 's/^/  /'
               exit 1
             fi
-            
+
             echo "✅ Kustomize build successful"
           done
-          
+
           echo ""
           echo "✅ All validations passed!"
 
@@ -781,30 +810,30 @@ jobs:
         if: inputs.create-pr == true
         run: |
           BRANCH_NAME="scaffold/${{ inputs.service-name }}"
-          
+
           git checkout -b "$BRANCH_NAME"
-          
+
           git add bases/${{ inputs.service-name }}
           git add environments/
-          
+
           git commit -m "feat: add ${{ inputs.service-name }} scaffold
-          
+
           - Service: ${{ inputs.service-name }}
           - Image: ${{ inputs.image-name }}
           - Environments: ${{ inputs.environments }}
           - External Secret: ${{ inputs.include-external-secret }} (${{ inputs.secret-store-type }})
           - Generated by: ${{ github.actor }}
           - Workflow: ${{ github.workflow }}"
-          
+
           git push origin "$BRANCH_NAME"
-          
+
           echo "branch-name=$BRANCH_NAME" >> $GITHUB_ENV
 
       - name: Create Pull Request
         if: inputs.create-pr == true
         run: |
           PR_TITLE="🆕 Add ${{ inputs.service-name }} scaffold"
-          
+
           # Build external secret section for PR body
           if [ "${{ inputs.include-external-secret }}" == "true" ]; then
             EXTERNAL_SECRET_SECTION="
@@ -817,7 +846,7 @@ jobs:
             KEY=$(echo "$KEY" | xargs)
             echo "    - \`${KEY}\`"
           done)
-          
+
           **⚠️ Important:** Ensure the following secrets exist in your secret manager:
           $(IFS=',' read -ra KEYS_ARRAY <<< "${{ inputs.secret-keys }}"
           for KEY in "${KEYS_ARRAY[@]}"; do
@@ -839,27 +868,27 @@ jobs:
           #### External Secret Configuration
           - ⏭️ Skipped - no external secret will be created"
           fi
-          
+
           PR_BODY="## New Service Scaffold
-          
+
           ### Service Details
           - **Name:** \`${{ inputs.service-name }}\`
           - **Image:** \`${{ inputs.image-name }}\`
           - **Environments:** ${{ inputs.environments }}
           - **Container Port:** ${{ inputs.custom-port }}
-          
+
           ### Generated Files
-          
+
           #### Base Manifests
           - \`bases/${{ inputs.service-name }}/deployment.yaml\`
           - \`bases/${{ inputs.service-name }}/service.yaml\`
-          $([ "${{ inputs.include-ingress }}" == "true" ] && echo "- \`bases/${{ inputs.service-name }}/ingress.yaml\`")
-          $([ "${{ inputs.include-hpa }}" == "true" ] && echo "- \`bases/${{ inputs.service-name }}/hpa.yaml\`")
-          $([ "${{ inputs.include-external-secret }}" == "true" ] && echo "- \`bases/${{ inputs.service-name }}/external-secret.yaml\`")
+          $(if [ "${{ inputs.include-ingress }}" == "true" ]; then echo "- \`bases/${{ inputs.service-name }}/ingress.yaml\`"; fi)
+          $(if [ "${{ inputs.include-hpa }}" == "true" ]; then echo "- \`bases/${{ inputs.service-name }}/hpa.yaml\`"; fi)
+          $(if [ "${{ inputs.include-external-secret }}" == "true" ]; then echo "- \`bases/${{ inputs.service-name }}/external-secret.yaml\`"; fi)
           - \`bases/${{ inputs.service-name }}/kustomization.yaml\`
-          
+
           ${EXTERNAL_SECRET_SECTION}
-          
+
           #### Environment Overlays
           $(IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
           for ENV in "${ENV_ARRAY[@]}"; do
@@ -870,31 +899,31 @@ jobs:
               echo "- \`environments/${ENV}/${{ inputs.service-name }}/\` (shared namespace: ${ENV})"
             fi
           done)
-          
+
           ### Next Steps
           - [ ] Review generated manifests
           - [ ] Customize environment-specific values if needed
-          $([ "${{ inputs.include-external-secret }}" == "true" ] && echo "- [ ] Ensure secrets exist in your secret manager (${{ inputs.secret-store-type }})")
+          $(if [ "${{ inputs.include-external-secret }}" == "true" ]; then echo "- [ ] Ensure secrets exist in your secret manager (${{ inputs.secret-store-type }})"; fi)
           - [ ] Verify ArgoCD ApplicationSet will detect new service
           - [ ] Merge to trigger deployment to dev/staging
           - [ ] For production: manually sync in ArgoCD UI
-          
+
           ### Configuration
           - **Health Check:** \`${{ inputs.health-check-path }}\`
           - **Readiness Check:** \`${{ inputs.readiness-check-path }}\`
           - **Components Applied:** security-hardening, observability, common-labels
-          
+
           ---
           *This PR was automatically generated by the scaffold workflow.*
           *Triggered by: @${{ github.actor }}*"
-          
+
           PR_URL=$(gh pr create \
             --title "$PR_TITLE" \
             --body "$PR_BODY" \
             --base master \
             --head "${{ env.branch-name }}" \
             --label "automated,scaffold,new-service")
-          
+
           echo "✅ Pull Request created: $PR_URL"
           echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
         env:
@@ -905,19 +934,19 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           git add bases/${{ inputs.service-name }}
           git add environments/
-          
+
           git commit -m "feat: add ${{ inputs.service-name }} scaffold
-          
+
           - Service: ${{ inputs.service-name }}
           - Image: ${{ inputs.image-name }}
           - External Secret: ${{ inputs.include-external-secret }} (${{ inputs.secret-store-type }})
           - Generated by: ${{ github.actor }}"
-          
+
           git push origin master
-          
+
           echo "✅ Changes committed directly to master"
 
       - name: Summary
@@ -932,7 +961,7 @@ jobs:
           echo ""
           echo "Files Created:"
           echo "  ✅ bases/${{ inputs.service-name }}/"
-          
+
           IFS=',' read -ra ENV_ARRAY <<< "${{ inputs.environments }}"
           for ENV in "${ENV_ARRAY[@]}"; do
             ENV=$(echo "$ENV" | xargs)
@@ -942,7 +971,7 @@ jobs:
               echo "  ✅ environments/${ENV}/${{ inputs.service-name }}/ (shared namespace)"
             fi
           done
-          
+
           echo ""
           if [ "${{ inputs.include-external-secret }}" == "true" ]; then
             echo "External Secret Configuration:"
@@ -973,7 +1002,7 @@ jobs:
           else
             echo "External Secret: ⏭️ Skipped"
           fi
-          
+
           echo ""
           if [ "${{ inputs.create-pr }}" == "true" ]; then
             echo "Pull Request: Created"
