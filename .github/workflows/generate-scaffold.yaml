@@ -491,16 +491,16 @@ jobs:
             # ═══════════════════════════════════════════════════════════════
 
             PATCHES="  - path: patches/deployment-patch.yaml
-              - path: patches/resource-patch.yaml"
+  - path: patches/resource-patch.yaml"
 
             if [ "$INCLUDE_INGRESS" == "true" ]; then
               PATCHES="${PATCHES}
-              - path: patches/ingress-patch.yaml"
+  - path: patches/ingress-patch.yaml"
             fi
 
             if [ "$INCLUDE_HPA" == "true" ]; then
               PATCHES="${PATCHES}
-              - path: patches/hpa-patch.yaml"
+  - path: patches/hpa-patch.yaml"
             fi
 
             if [ "$ENV" == "prod" ]; then
