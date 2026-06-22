@@ -370,8 +370,7 @@ jobs:
             --title "$PR_TITLE" \
             --body "$PR_BODY" \
             --base master \
-            --head "${{ env.branch-name }}" \
-            --label "automated,scaffold,new-service")
+            --head "${{ env.branch-name }}")
 
           echo "✅ Pull Request created: $PR_URL"
           echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
