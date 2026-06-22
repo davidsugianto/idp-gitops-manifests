@@ -23,6 +23,8 @@
 
 ## 📝 Usage Example with generate-scaffold shell script
 
+The shell script is the single source of truth for scaffold generation. The GitHub workflow passes its inputs through to this script rather than duplicating manifest-generation logic inline.
+
 ### Example 1: Default (AWS Secrets Manager)
 
 ```bash
@@ -34,21 +36,30 @@ Creates external secret with:
 - **Keys:** `database-url`, `api-key`
 - **Path:** `/dev/go-payment-service`
 
-### Example 2: Vault with Custom Keys
+### Example 2: Workflow-equivalent flag-based usage
 
 ```bash
-./scripts/generate-service-scaffold.sh go-payment-service ghcr.io/my-org --secret-store vault --secret-keys db-password,redis-url,jwt-secret
+./scripts/generate-service-scaffold.sh \
+  --service-name go-payment-service \
+  --image-name ghcr.io/my-org/go-payment-service \
+  --environments dev,staging,prod \
+  --include-ingress true \
+  --include-hpa true \
+  --include-external-secret true \
+  --secret-store-type vault \
+  --secret-keys db-password,redis-url,jwt-secret \
+  --port 8080 \
+  --health-check-path /health \
+  --readiness-check-path /ready
 ```
-
-Creates external secret with:
-- **Store:** `vault-secret-store`
-- **Keys:** `db-password`, `redis-url`, `jwt-secret`
-- **Path:** `secret/data/dev/go-payment-service`
 
 ### Example 3: GCP Secret Manager
 
 ```bash
-./scripts/generate-service-scaffold.sh go-payment-service ghcr.io/my-org --secret-store gcp
+./scripts/generate-service-scaffold.sh \
+  --service-name go-payment-service \
+  --image-name ghcr.io/my-org/go-payment-service \
+  --secret-store-type gcp
 ```
 
 Creates external secret with:
@@ -59,7 +70,10 @@ Creates external secret with:
 ### Example 4: Skip External Secret
 
 ```bash
-./scripts/generate-service-scaffold.sh go-payment-service ghcr.io/my-org --skip-secrets
+./scripts/generate-service-scaffold.sh \
+  --service-name go-payment-service \
+  --image-name ghcr.io/my-org/go-payment-service \
+  --include-external-secret false
 ```
 
 *No external secret will be created.*
