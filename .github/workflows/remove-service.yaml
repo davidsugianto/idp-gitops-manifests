@@ -120,7 +120,7 @@ jobs:
 
       - name: Remove service files
         run: |
-          ./scripts/remove-service-scaffold.sh \
+          bash ./scripts/remove-service-scaffold.sh \
             --service-name "${{ inputs.service-name }}" \
             --environments "${{ inputs.environments }}" \
             --delete-base "${{ inputs.delete-base }}" \
