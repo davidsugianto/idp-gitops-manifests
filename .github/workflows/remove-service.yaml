@@ -1,0 +1,275 @@
+name: Remove Service Scaffold
+
+on:
+  workflow_dispatch:
+    inputs:
+      service-name:
+        description: 'Service name to remove (e.g., go-payment-service)'
+        required: true
+        type: string
+      environments:
+        description: 'Environments to remove from'
+        required: true
+        type: choice
+        options:
+          - 'auto'
+          - 'dev,staging,prod'
+          - 'dev,staging'
+          - 'dev'
+          - 'staging'
+          - 'prod'
+        default: 'auto'
+      delete-base:
+        description: 'Delete bases/<service> when safe'
+        required: true
+        type: boolean
+        default: true
+      allow-partial:
+        description: 'Allow partial removal when service is not present everywhere'
+        required: true
+        type: boolean
+        default: true
+      create-pr:
+        description: 'Create Pull Request (recommended)'
+        required: true
+        type: boolean
+        default: true
+      confirm-service-name:
+        description: 'Type the exact service name again to confirm removal'
+        required: true
+        type: string
+
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      environments:
+        required: false
+        type: string
+        default: 'auto'
+      delete-base:
+        required: false
+        type: boolean
+        default: true
+      allow-partial:
+        required: false
+        type: boolean
+        default: true
+      create-pr:
+        required: false
+        type: boolean
+        default: true
+      confirm-service-name:
+        required: true
+        type: string
+
+jobs:
+  remove-service:
+    name: Remove Service Scaffold
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: '5.3.0'
+
+      - name: Validate inputs
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Validating removal inputs..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [[ ! "${{ inputs.service-name }}" =~ ^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$ ]]; then
+            echo "❌ Invalid service name: ${{ inputs.service-name }}"
+            exit 1
+          fi
+
+          if [ "${{ inputs.confirm-service-name }}" != "${{ inputs.service-name }}" ]; then
+            echo "❌ Confirmation does not match service name"
+            exit 1
+          fi
+
+          if [ ! -d "bases/${{ inputs.service-name }}" ] && \
+             [ ! -d "environments/dev/${{ inputs.service-name }}" ] && \
+             [ ! -d "environments/staging/${{ inputs.service-name }}" ] && \
+             [ ! -d "environments/prod/${{ inputs.service-name }}" ]; then
+            if ! grep -Fq "  - ${{ inputs.service-name }}" environments/dev/kustomization.yaml \
+              && ! grep -Fq "  - ${{ inputs.service-name }}" environments/staging/kustomization.yaml \
+              && ! grep -Fq "  - ${{ inputs.service-name }}" environments/prod/kustomization.yaml; then
+              echo "❌ Service '${{ inputs.service-name }}' does not exist in bases/ or environments/"
+              exit 1
+            fi
+          fi
+
+          echo "✅ Inputs validated"
+          echo ""
+          echo "📋 Configuration:"
+          echo "  Service Name: ${{ inputs.service-name }}"
+          echo "  Environments: ${{ inputs.environments }}"
+          echo "  Delete Base: ${{ inputs.delete-base }}"
+          echo "  Allow Partial: ${{ inputs.allow-partial }}"
+          echo "  Create PR: ${{ inputs.create-pr }}"
+
+      - name: Remove service files
+        run: |
+          ./scripts/remove-service-scaffold.sh \
+            --service-name "${{ inputs.service-name }}" \
+            --environments "${{ inputs.environments }}" \
+            --delete-base "${{ inputs.delete-base }}" \
+            --allow-partial "${{ inputs.allow-partial }}"
+
+      - name: Validate remaining manifests
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Validating remaining manifests..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          for ENV in dev staging prod; do
+            echo ""
+            echo "📦 Validating: environments/${ENV}"
+            if ! kustomize build "environments/${ENV}" > /dev/null 2>&1; then
+              echo "❌ Kustomize build failed for environments/${ENV}"
+              kustomize build "environments/${ENV}" 2>&1 | sed 's/^/  /'
+              exit 1
+            fi
+            echo "✅ Kustomize build successful"
+          done
+
+      - name: Configure Git
+        if: inputs.create-pr == true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create branch and commit
+        if: inputs.create-pr == true
+        run: |
+          BRANCH_NAME="remove/${{ inputs.service-name }}-${{ github.run_id }}"
+
+          git checkout -b "$BRANCH_NAME"
+
+          if [ -d "bases/${{ inputs.service-name }}" ]; then
+            git add "bases/${{ inputs.service-name }}"
+          else
+            git add -A "bases/${{ inputs.service-name }}"
+          fi
+
+          for ENV in dev staging prod; do
+            if [ -d "environments/${ENV}/${{ inputs.service-name }}" ]; then
+              git add "environments/${ENV}/${{ inputs.service-name }}"
+            else
+              git add -A "environments/${ENV}/${{ inputs.service-name }}"
+            fi
+            git add "environments/${ENV}/kustomization.yaml"
+          done
+
+          git commit -m "chore: remove ${{ inputs.service-name }} scaffold
+
+          - Service: ${{ inputs.service-name }}
+          - Environments: ${{ inputs.environments }}
+          - Delete Base: ${{ inputs.delete-base }}
+          - Generated by: ${{ github.actor }}
+          - Workflow: ${{ github.workflow }}"
+
+          git push origin "$BRANCH_NAME"
+
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Create Pull Request
+        id: create_pr
+        if: inputs.create-pr == true
+        run: |
+          PR_TITLE="🧹 Remove ${{ inputs.service-name }} scaffold"
+          PR_BODY="## Remove Service Scaffold
+
+          ### Service Details
+          - **Name:** \
+`${{ inputs.service-name }}`
+          - **Environments:** ${{ inputs.environments }}
+          - **Delete Base:** ${{ inputs.delete-base }}
+          - **Allow Partial:** ${{ inputs.allow-partial }}
+
+          ### Cleanup Scope
+          - Remove \
+`bases/${{ inputs.service-name }}` when requested and safe
+          - Remove overlay directories where the service exists
+          - Remove exact top-level kustomization entries from affected environments
+
+          ### Validation
+          - [x] kustomize build environments/dev
+          - [x] kustomize build environments/staging
+          - [x] kustomize build environments/prod
+
+          ---
+          *This PR was automatically generated by the remove-service workflow.*
+          *Triggered by: @${{ github.actor }}*"
+
+          PR_URL=$(gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --base master \
+            --head "${{ env.branch-name }}")
+
+          echo "✅ Pull Request created: $PR_URL"
+          echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Direct commit (no PR)
+        if: inputs.create-pr == false
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -d "bases/${{ inputs.service-name }}" ]; then
+            git add "bases/${{ inputs.service-name }}"
+          else
+            git add -A "bases/${{ inputs.service-name }}"
+          fi
+
+          for ENV in dev staging prod; do
+            if [ -d "environments/${ENV}/${{ inputs.service-name }}" ]; then
+              git add "environments/${ENV}/${{ inputs.service-name }}"
+            else
+              git add -A "environments/${ENV}/${{ inputs.service-name }}"
+            fi
+            git add "environments/${ENV}/kustomization.yaml"
+          done
+
+          git commit -m "chore: remove ${{ inputs.service-name }} scaffold
+
+          - Service: ${{ inputs.service-name }}
+          - Environments: ${{ inputs.environments }}
+          - Delete Base: ${{ inputs.delete-base }}
+          - Generated by: ${{ github.actor }}"
+
+          git push origin master
+
+          echo "✅ Changes committed directly to master"
+
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ SERVICE REMOVAL COMPLETE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Service: ${{ inputs.service-name }}"
+          echo "Environments: ${{ inputs.environments }}"
+          echo "Delete Base: ${{ inputs.delete-base }}"
+          echo "Allow Partial: ${{ inputs.allow-partial }}"
+          echo ""
+          if [ "${{ inputs.create-pr }}" == "true" ]; then
+            echo "Pull Request URL: ${{ steps.create_pr.outputs.pr-url }}"
+          else
+            echo "Direct Commit: Pushed to master"
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

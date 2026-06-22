@@ -21,6 +21,20 @@
 9. Platform Engineer approves the deployment in the ArgoCD UI
 10. ArgoCD syncs to the production cluster
 
+## 🧹 Service Removal Workflow
+
+Use `.github/workflows/remove-service.yaml` to trigger cleanup from GitHub Actions. The workflow validates the requested service name, calls `./scripts/remove-service-scaffold.sh`, rebuilds the top-level environment overlays, and opens a PR with the cleanup diff.
+
+Local equivalent:
+
+```bash
+./scripts/remove-service-scaffold.sh \
+  --service-name go-payment-service \
+  --environments auto \
+  --delete-base true \
+  --allow-partial true
+```
+
 ## 📝 Usage Example with generate-scaffold shell script
 
 The shell script is the single source of truth for scaffold generation. The GitHub workflow passes its inputs through to this script rather than duplicating manifest-generation logic inline.

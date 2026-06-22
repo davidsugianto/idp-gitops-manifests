@@ -59,6 +59,18 @@ git push origin main
 4. Platform Engineer reviews and merges PR
 5. ArgoCD automatically syncs changes to cluster
 
+## 🧹 Removing a Service
+
+`./scripts/remove-service-scaffold.sh` is the single source of truth for scaffold cleanup. The `remove-service` GitHub Actions workflow delegates file removal and top-level kustomization cleanup to this script.
+
+```bash
+./scripts/remove-service-scaffold.sh \
+  --service-name my-old-service \
+  --environments auto \
+  --delete-base true \
+  --allow-partial true
+```
+
 ## 📊 Environments
 
 - dev: Auto-sync enabled, minimal resources
